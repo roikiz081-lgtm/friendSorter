@@ -19,5 +19,6 @@ let dataSetVersion = '';
 
 /**
  * Image root, will be appended to the start of every image URL.
+ * Change this if your images are stored elsewhere.
  */
-const imageRoot = 'https://i.imgur.com/';
+const imageRoot = 'src/assets/char/';

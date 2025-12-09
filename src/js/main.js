@@ -1,11 +1,11 @@
-/** @type {CharData} */
-let characterData       = [];   // Initial character data set used.
-/** @type {CharData} */
-let characterDataToSort = [];   // Character data set after filtering.
+/** @type {ItemData} */
+let itemData       = [];   // Initial item data set used.
+/** @type {ItemData} */
+let itemDataToSort = [];   // Item data set after filtering.
 /** @type {Options} */
 let options             = [];   // Initial option set used.
 
-let currentVersion      = '';   // Which version of characterData and options are used.
+let currentVersion      = '';   // Which version of itemData and options are used.
 
 /** @type {(boolean|boolean[])[]} */
 let optTaken  = [];             // Records which options are set.
@@ -13,47 +13,34 @@ let optTaken  = [];             // Records which options are set.
 /** Save Data. Concatenated into array, joined into string (delimited by '|') and compressed with lz-string. */
 let timestamp = 0;        // savedata[0]      (Unix time when sorter was started, used as initial PRNG seed and in dataset selection)
 let timeTaken = 0;        // savedata[1]      (Number of ms elapsed when sorter ends, used as end-of-sort flag and in filename generation)
-let choices   = '';       // savedata[2]      (String of '0', '1' and '2' that records what sorter choices are made)
+let choices   = '';       // savedata[2]      (String of '0' and '1' that records what sorter choices are made)
 let optStr    = '';       // savedata[3]      (String of '0' and '1' that denotes top-level option selection)
 let suboptStr = '';       // savedata[4...n]  (String of '0' and '1' that denotes nested option selection, separated by '|')
 let timeError = false;    // Shifts entire savedata array to the right by 1 and adds an empty element at savedata[0] if true.
 
-/** Intermediate sorter data. */
-let sortedIndexList = [];
-let recordDataList  = [];
-let parentIndexList = [];
-let tiedDataList    = [];
+/** Point-based sorter data. */
+let itemPoints = [];     // Points for each item (indexed by itemDataToSort index)
+let leftItemIndex = -1;   // Index of left item currently shown
+let rightItemIndex = -1;  // Index of right item currently shown
+let comparisonNo = 0;      // Number of comparisons made
+let totalComparisons = 0; // Total number of comparisons to make
+let comparisonHistory = []; // History for undo: [{left, right, choice}]
 
-let leftIndex       = 0;
-let leftInnerIndex  = 0;
-let rightIndex      = 0;
-let rightInnerIndex = 0;
-let battleNo        = 1;
-let sortedNo        = 0;
-let pointer         = 0;
-
-/** A copy of intermediate sorter data is recorded for undo() purposes. */
-let sortedIndexListPrev = [];
-let recordDataListPrev  = [];
-let parentIndexListPrev = [];
-let tiedDataListPrev    = [];
-
-let leftIndexPrev       = 0;
-let leftInnerIndexPrev  = 0;
-let rightIndexPrev      = 0;
-let rightInnerIndexPrev = 0;
-let battleNoPrev        = 1;
-let sortedNoPrev        = 0;
-let pointerPrev         = 0;
+/** A copy of sorter data is recorded for undo() purposes. */
+let itemPointsPrev = [];
+let leftItemIndexPrev = -1;
+let rightItemIndexPrev = -1;
+let comparisonNoPrev = 0;
+let comparisonHistoryPrev = [];
 
 /** Miscellaneous sorter data that doesn't need to be saved for undo(). */
-let finalCharacters = [];
+let finalItems = [];
 let loading         = false;
-let totalBattles    = 0;
 let sorterURL       = window.location.host + window.location.pathname;
 let storedSaveType  = localStorage.getItem(`${sorterURL}_saveType`);
 
 /** Initialize script. */
+let selectedMode = 'ERP';
 function init() {
 
   /** Define button behavior. */
@@ -68,7 +55,7 @@ function init() {
   document.querySelector('.sorting.save.button').addEventListener('click', () => saveProgress('Progress'));
   
   document.querySelector('.finished.save.button').addEventListener('click', () => saveProgress('Last Result'));
-  document.querySelector('.finished.getimg.button').addEventListener('click', generateImage);
+  document.querySelector('.finished.getimg.button').addEventListener('click', generateJSON);
   document.querySelector('.finished.list.button').addEventListener('click', generateTextList);
 
   document.querySelector('.clearsave').addEventListener('click', clearProgress);
@@ -76,7 +63,7 @@ function init() {
   /** Define keyboard controls (up/down/left/right vimlike k/j/h/l). */
   document.addEventListener('keypress', (ev) => {
     /** If sorting is in progress. */
-    if (timestamp && !timeTaken && !loading && choices.length === battleNo - 1) {
+    if (timestamp && !timeTaken && !loading && leftItemIndex >= 0 && rightItemIndex >= 0) {
       switch(ev.key) {
         case 's': case '3':                   saveProgress('Progress'); break;
         case 'h': case 'ArrowLeft':           pick('left'); break;
@@ -87,10 +74,10 @@ function init() {
       }
     }
     /** If sorting has ended. */
-    else if (timeTaken && choices.length === battleNo - 1) {
+    else if (timeTaken && comparisonNo >= totalComparisons) {
       switch(ev.key) {
         case 'k': case '1': saveProgress('Last Result'); break;
-        case 'j': case '2': generateImage(); break;
+        case 'j': case '2': generateJSON(); break;
         case 's': case '3': generateTextList(); break;
         default: break;
       }
@@ -103,21 +90,7 @@ function init() {
     }
   });
 
-  document.querySelector('.image.selector').insertAdjacentElement('beforeend', document.createElement('select'));
-
-  /** Initialize image quantity selector for results. */
-  for (let i = 0; i <= 10; i++) {
-    const select = document.createElement('option');
-    select.value = i;
-    select.text = i;
-    if (i === 3) { select.selected = 'selected'; }
-    document.querySelector('.image.selector > select').insertAdjacentElement('beforeend', select);
-  }
-
-  document.querySelector('.image.selector > select').addEventListener('input', (e) => {
-    const imageNum = e.target.options[e.target.selectedIndex].value;
-    result(Number(imageNum));
-  });
+  // Image selector removed - now showing images for all items
 
   /** Show load button if save data exists. */
   if (storedSaveType) {
@@ -126,6 +99,34 @@ function init() {
       el.style['grid-row'] = 'span 3';
       el.style.display = 'block';
     });
+  }
+
+  // Initialize center action / mode buttons (default: first selected)
+  const modeBtns = document.querySelectorAll('.center-actions .half');
+  if (modeBtns && modeBtns.length) {
+    modeBtns.forEach((btn, idx) => {
+      // Ensure a data-mode exists
+      if (!btn.dataset.mode) btn.dataset.mode = idx === 0 ? 'ERP' : 'SPAM';
+      btn.addEventListener('click', () => {
+        modeBtns.forEach(b => b.classList.remove('selected'));
+        btn.classList.add('selected');
+        selectedMode = btn.dataset.mode;
+        // Update title to reflect current mode
+        const siteTitle = document.querySelector('.site-title');
+        if (siteTitle) {
+          siteTitle.textContent = `Political Compass Sorter - ${selectedMode}`;
+        }
+      });
+    });
+    // Default selection and title update
+    const sel = document.querySelector('.center-actions .half.selected');
+    if (sel) {
+      selectedMode = sel.dataset.mode;
+      const siteTitle = document.querySelector('.site-title');
+      if (siteTitle) {
+        siteTitle.textContent = `Political Compass Sorter - ${selectedMode}`;
+      }
+    }
   }
 
   setLatestDataset();
@@ -137,7 +138,7 @@ function init() {
 /** Begin sorting. */
 function start() {
   /** Copy data into sorting array to filter. */
-  characterDataToSort = characterData.slice(0);
+  itemDataToSort = itemData.slice(0);
 
   /** Check selected options and convert to boolean array form. */
   optTaken = [];
@@ -183,83 +184,39 @@ function start() {
           if (subBool) { subList.push(options[index].sub[subIndex].key); }
           return subList;
         }, []);
-        characterDataToSort = characterDataToSort.filter(char => {
-          if (!(opt.key in char.opts)) console.warn(`Warning: ${opt.key} not set for ${char.name}.`);
-          return opt.key in char.opts && char.opts[opt.key].some(key => subArray.includes(key));
+        itemDataToSort = itemDataToSort.filter(item => {
+          if (!(opt.key in item.opts)) console.warn(`Warning: ${opt.key} not set for ${item.name}.`);
+          return opt.key in item.opts && item.opts[opt.key].some(key => subArray.includes(key));
         });
       }
     } else if (optTaken[index]) {
-      characterDataToSort = characterDataToSort.filter(char => !char.opts[opt.key]);
+      itemDataToSort = itemDataToSort.filter(item => !item.opts[opt.key]);
     }
   });
 
-  if (characterDataToSort.length < 2) {
-    alert('Cannot sort with less than two characters. Please reselect.');
+  if (itemDataToSort.length < 2) {
+    alert('Cannot sort with less than two items. Please reselect.');
     return;
   }
 
-  /** Shuffle character array with timestamp seed. */
+  /** Initialize point system. */
   timestamp = timestamp || new Date().getTime();
   if (new Date(timestamp) < new Date(currentVersion)) { timeError = true; }
   Math.seedrandom(timestamp);
 
-  characterDataToSort = characterDataToSort
-    .map(a => [Math.random(), a])
-    .sort((a,b) => a[0] - b[0])
-    .map(a => a[1]);
-
-  /**
-   * tiedDataList will keep a record of indexes on which characters are equal (i.e. tied) 
-   * to another one. recordDataList will have an interim list of sorted elements during
-   * the mergesort process.
-   */
-
-  recordDataList  = characterDataToSort.map(() => 0);
-  tiedDataList    = characterDataToSort.map(() => -1);
-
-  /** 
-   * Put a list of indexes that we'll be sorting into sortedIndexList. These will refer back
-   * to characterDataToSort.
-   * 
-   * Begin splitting each element into little arrays and spread them out over sortedIndexList
-   * increasing its length until it become arrays of length 1 and you can't split it anymore. 
-   * 
-   * parentIndexList indicates each element's parent (i.e. where it was split from), except 
-   * for the first element, which has no parent.
-   */
-
-  sortedIndexList[0] = characterDataToSort.map((val, idx) => idx);
-  parentIndexList[0] = -1;
-
-  let midpoint = 0;   // Indicates where to split the array.
-  let marker   = 1;   // Indicates where to place our newly split array.
-
-  for (let i = 0; i < sortedIndexList.length; i++) {
-    if (sortedIndexList[i].length > 1) {
-      let parent = sortedIndexList[i];
-      midpoint = Math.ceil(parent.length / 2);
-
-      sortedIndexList[marker] = parent.slice(0, midpoint);              // Split the array in half, and put the left half into the marked index.
-      totalBattles += sortedIndexList[marker].length;                   // The result's length will add to our total number of comparisons.
-      parentIndexList[marker] = i;                                      // Record where it came from.
-      marker++;                                                         // Increment the marker to put the right half into.
-
-      sortedIndexList[marker] = parent.slice(midpoint, parent.length);  // Put the right half next to its left half.
-      totalBattles += sortedIndexList[marker].length;                   // The result's length will add to our total number of comparisons.
-      parentIndexList[marker] = i;                                      // Record where it came from.
-      marker++;                                                         // Rinse and repeat, until we get arrays of length 1. This is initialization of merge sort.
-    }
-  }
-
-  leftIndex  = sortedIndexList.length - 2;    // Start with the second last value and...
-  rightIndex = sortedIndexList.length - 1;    // the last value in the sorted list and work our way down to index 0.
-
-  leftInnerIndex  = 0;                        // Inner indexes, because we'll be comparing the left array
-  rightInnerIndex = 0;                        // to the right array, in order to merge them into one sorted array.
+  /** Initialize points for all items to 0. */
+  itemPoints = itemDataToSort.map(() => 0);
+  comparisonNo = 0;
+  comparisonHistory = [];
+  
+  /** Calculate total comparisons: show each pair once (n*(n-1)/2 comparisons) */
+  totalComparisons = Math.min(itemDataToSort.length * (itemDataToSort.length - 1) / 2, 100); // Cap at 100 comparisons for performance
 
   /** Disable all checkboxes and hide/show appropriate parts while we preload the images. */
   document.querySelectorAll('input[type=checkbox]').forEach(cb => cb.disabled = true);
   document.querySelectorAll('.starting.button').forEach(el => el.style.display = 'none');
+  const centerActions = document.querySelector('.center-actions');
+  if (centerActions) centerActions.style.display = 'none';
   document.querySelector('.loading.button').style.display = 'block';
   document.querySelector('.progress').style.display = 'block';
   loading = true;
@@ -269,37 +226,63 @@ function start() {
     document.querySelector('.loading.button').style.display = 'none';
     document.querySelectorAll('.sorting.button').forEach(el => el.style.display = 'block');
     document.querySelectorAll('.sort.text').forEach(el => el.style.display = 'block');
+    selectNextPair();
     display();
   });
 }
 
+/** Select next pair of items to compare. */
+function selectNextPair() {
+  if (comparisonNo >= totalComparisons) {
+    finishSorting();
+    return;
+  }
+
+  /** Generate random pair that hasn't been compared yet. */
+  let attempts = 0;
+  do {
+    leftItemIndex = Math.floor(Math.random() * itemDataToSort.length);
+    rightItemIndex = Math.floor(Math.random() * itemDataToSort.length);
+    attempts++;
+  } while ((leftItemIndex === rightItemIndex || 
+            comparisonHistory.some(h => 
+              (h.left === leftItemIndex && h.right === rightItemIndex) ||
+              (h.left === rightItemIndex && h.right === leftItemIndex)
+            )) && attempts < 100);
+
+  if (leftItemIndex === rightItemIndex) {
+    finishSorting();
+    return;
+  }
+}
+
 /** Displays the current state of the sorter. */
 function display() {
-  const percent         = Math.floor(sortedNo * 100 / totalBattles);
-  const leftCharIndex   = sortedIndexList[leftIndex][leftInnerIndex];
-  const rightCharIndex  = sortedIndexList[rightIndex][rightInnerIndex];
-  const leftChar        = characterDataToSort[leftCharIndex];
-  const rightChar       = characterDataToSort[rightCharIndex];
+  if (leftItemIndex < 0 || rightItemIndex < 0 || comparisonNo >= totalComparisons) {
+    return;
+  }
 
-  const charNameDisp = name => {
-    const charName = reduceTextWidth(name, 'Arial 12.8px', 220);
-    const charTooltip = name !== charName ? name : '';
-    return `<p title="${charTooltip}">${charName}</p>`;
+  const percent = Math.floor(comparisonNo * 100 / totalComparisons);
+  const leftItem = itemDataToSort[leftItemIndex];
+  const rightItem = itemDataToSort[rightItemIndex];
+
+  const itemNameDisp = name => {
+    const itemName = reduceTextWidth(name, 'Arial 12.8px', 220);
+    const itemTooltip = name !== itemName ? name : '';
+    return `<p title="${itemTooltip}">${itemName}</p>`;
   };
 
-  progressBar(`Battle No. ${battleNo}`, percent);
+  progressBar(`Comparison No. ${comparisonNo + 1} / ${totalComparisons}`, percent);
 
-  document.querySelector('.left.sort.image').src = leftChar.img;
-  document.querySelector('.right.sort.image').src = rightChar.img;
+  document.querySelector('.left.sort.image').src = leftItem.img;
+  document.querySelector('.right.sort.image').src = rightItem.img;
 
-  
-
-  document.querySelector('.left.sort.text').innerHTML = charNameDisp(leftChar.name);
-  document.querySelector('.right.sort.text').innerHTML = charNameDisp(rightChar.name);
+  document.querySelector('.left.sort.text').innerHTML = itemNameDisp(leftItem.name);
+  document.querySelector('.right.sort.text').innerHTML = itemNameDisp(rightItem.name);
 
   /** Autopick if choice has been given. */
-  if (choices.length !== battleNo - 1) {
-    switch (Number(choices[battleNo - 1])) {
+  if (choices.length > comparisonNo) {
+    switch (Number(choices[comparisonNo])) {
       case 0: pick('left'); break;
       case 1: pick('right'); break;
       case 2: pick('tie'); break;
@@ -309,147 +292,70 @@ function display() {
 }
 
 /**
- * Sort between two character choices or tie.
+ * Pick between two items - click-based point system.
  * 
  * @param {'left'|'right'|'tie'} sortType
  */
 function pick(sortType) {
-  if ((timeTaken && choices.length === battleNo - 1) || loading) { return; }
+  if ((timeTaken && comparisonNo >= totalComparisons) || loading) { return; }
   else if (!timestamp) { return start(); }
+  if (leftItemIndex < 0 || rightItemIndex < 0) { return; }
 
-  sortedIndexListPrev = sortedIndexList.slice(0);
-  recordDataListPrev  = recordDataList.slice(0);
-  parentIndexListPrev = parentIndexList.slice(0);
-  tiedDataListPrev    = tiedDataList.slice(0);
+  /** Save state for undo. */
+  itemPointsPrev = itemPoints.slice(0);
+  leftItemIndexPrev = leftItemIndex;
+  rightItemIndexPrev = rightItemIndex;
+  comparisonNoPrev = comparisonNo;
+  comparisonHistoryPrev = comparisonHistory.slice(0);
 
-  leftIndexPrev       = leftIndex;
-  leftInnerIndexPrev  = leftInnerIndex;
-  rightIndexPrev      = rightIndex;
-  rightInnerIndexPrev = rightInnerIndex;
-  battleNoPrev        = battleNo;
-  sortedNoPrev        = sortedNo;
-  pointerPrev         = pointer;
-
-  /** 
-   * For picking 'left' or 'right':
-   * 
-   * Input the selected character's index into recordDataList. Increment the pointer of
-   * recordDataList. Then, check if there are any ties with this character, and keep
-   * incrementing until we find no more ties. 
-   */
-  switch (sortType) {
-    case 'left': {
-      if (choices.length === battleNo - 1) { choices += '0'; }
-      recordData('left');
-      while (tiedDataList[recordDataList[pointer - 1]] != -1) {
-        recordData('left');
-      }
-      break;
-    }
-    case 'right': {
-      if (choices.length === battleNo - 1) { choices += '1'; }
-      recordData('right');
-      while (tiedDataList[recordDataList [pointer - 1]] != -1) {
-        recordData('right');
-      }
-      break;
-    }
-
-  /** 
-   * For picking 'tie' (i.e. heretics):
-   * 
-   * Proceed as if we picked the 'left' character. Then, we record the right character's
-   * index value into the list of ties (at the left character's index) and then proceed
-   * as if we picked the 'right' character.
-   */
-    case 'tie': {
-      if (choices.length === battleNo - 1) { choices += '2'; }
-      recordData('left');
-      while (tiedDataList[recordDataList[pointer - 1]] != -1) {
-        recordData('left');
-      }
-      tiedDataList[recordDataList[pointer - 1]] = sortedIndexList[rightIndex][rightInnerIndex];
-      recordData('right');
-      while (tiedDataList[recordDataList [pointer - 1]] != -1) {
-        recordData('right');
-      }
-      break;
-    }
-    default: return;
-  }
-
-  /**
-   * Once we reach the limit of the 'right' character list, we 
-   * insert all of the 'left' characters into the record, or vice versa.
-   */
-  const leftListLen = sortedIndexList[leftIndex].length;
-  const rightListLen = sortedIndexList[rightIndex].length;
-
-  if (leftInnerIndex < leftListLen && rightInnerIndex === rightListLen) {
-    while (leftInnerIndex < leftListLen) {
-      recordData('left');
-    }
-  } else if (leftInnerIndex === leftListLen && rightInnerIndex < rightListLen) {
-    while (rightInnerIndex < rightListLen) {
-      recordData('right');
+  /** Record choice. */
+  if (choices.length === comparisonNo) {
+    if (sortType === 'left') {
+      choices += '0';
+    } else if (sortType === 'right') {
+      choices += '1';
+    } else if (sortType === 'tie') {
+      choices += '2';
     }
   }
 
-  /**
-   * Once we reach the end of both 'left' and 'right' character lists, we can remove 
-   * the arrays from the initial mergesort array, since they are now recorded. This
-   * record is a sorted version of both lists, so we can replace their original 
-   * (unsorted) parent with a sorted version. Purge the record afterwards.
-   */
-  if (leftInnerIndex === leftListLen && rightInnerIndex === rightListLen) {
-    for (let i = 0; i < leftListLen + rightListLen; i++) {
-      sortedIndexList[parentIndexList[leftIndex]][i] = recordDataList[i];
-    }
-    sortedIndexList.pop();
-    sortedIndexList.pop();
-    leftIndex = leftIndex - 2;
-    rightIndex = rightIndex - 2;
-    leftInnerIndex = 0;
-    rightInnerIndex = 0;
-
-    sortedIndexList.forEach((val, idx) => recordDataList[idx] = 0);
-    pointer = 0;
+  /** Update points: clicked item gets +1, other gets -1. For ties, neither changes. */
+  if (sortType === 'left') {
+    itemPoints[leftItemIndex]++;
+    itemPoints[rightItemIndex]--;
+  } else if (sortType === 'right') {
+    itemPoints[rightItemIndex]++;
+    itemPoints[leftItemIndex]--;
+  } else if (sortType === 'tie') {
+    // When tied, neither item gains or loses points
+    // Points remain unchanged
   }
 
-  /**
-   * If, after shifting the 'left' index on the sorted list, we reach past the beginning
-   * of the sorted array, that means the entire array is now sorted. The original unsorted
-   * array in index 0 is now replaced with a sorted version, and we will now output this.
-   */
-  if (leftIndex < 0) {
-    timeTaken = timeTaken || new Date().getTime() - timestamp;
+  /** Record this comparison. */
+  comparisonHistory.push({
+    left: leftItemIndex,
+    right: rightItemIndex,
+    choice: sortType
+  });
 
-    progressBar(`Battle No. ${battleNo} - Completed!`, 100);
+  comparisonNo++;
 
-    result();
+  /** Select next pair or finish. */
+  if (comparisonNo >= totalComparisons) {
+    finishSorting();
   } else {
-    battleNo++;
+    selectNextPair();
     display();
   }
 }
 
-/**
- * Records data in recordDataList.
- * 
- * @param {'left'|'right'} sortType Record from the left or the right character array.
- */
-function recordData(sortType) {
-  if (sortType === 'left') {
-    recordDataList[pointer] = sortedIndexList[leftIndex][leftInnerIndex];
-    leftInnerIndex++;
-  } else {
-    recordDataList[pointer] = sortedIndexList[rightIndex][rightInnerIndex];
-    rightInnerIndex++;
-  }
-  
-  pointer++;
-  sortedNo++;
+/** Finish sorting and show results. */
+function finishSorting() {
+  timeTaken = timeTaken || new Date().getTime() - timestamp;
+  progressBar(`Completed!`, 100);
+  result();
 }
+
 
 /**
  * Modifies the progress bar.
@@ -464,13 +370,12 @@ function progressBar(indicator, percentage) {
 }
 
 /**
- * Shows the result of the sorter.
- * 
- * @param {number} [imageNum=3] Number of images to display. Defaults to 3.
+ * Shows the result of the sorter, sorted by points.
+ * Displays images for all items.
  */
-function result(imageNum = 3) {
+function result() {
   document.querySelectorAll('.finished.button').forEach(el => el.style.display = 'block');
-  document.querySelector('.image.selector').style.display = 'block';
+  document.querySelector('.image.selector').style.display = 'none'; // Hide selector since we show all images
   document.querySelector('.time.taken').style.display = 'block';
   
   document.querySelectorAll('.sorting.button').forEach(el => el.style.display = 'none');
@@ -478,69 +383,248 @@ function result(imageNum = 3) {
   document.querySelector('.options').style.display = 'none';
   document.querySelector('.info').style.display = 'none';
 
-  const header = '<div class="result head"><div class="left">Order</div><div class="right">Name</div></div>';
+  const header = '<div class="result head"><div class="left">Rank</div><div class="right">Name (Points)</div></div>';
   const timeStr = `This sorter was completed on ${new Date(timestamp + timeTaken).toString()} and took ${msToReadableTime(timeTaken)}. <a href="${location.protocol}//${sorterURL}">Do another sorter?</a>`;
-  const imgRes = (char, num) => {
-    const charName = reduceTextWidth(char.name, 'Arial 12px', 160);
-    const charTooltip = char.name !== charName ? char.name : '';
-    return `<div class="result image"><div class="left"><span>${num}</span></div><div class="right"><img src="${char.img}"><div><span title="${charTooltip}">${charName}</span></div></div></div>`;
+  
+  const imgRes = (item, num, points) => {
+    const itemName = reduceTextWidth(item.name, 'Arial 12px', 160);
+    const itemTooltip = item.name !== itemName ? item.name : '';
+    return `<div class="result image"><div class="left"><span>${num}</span></div><div class="right"><img src="${item.img}"><div><span title="${itemTooltip}">${itemName} (${points})</span></div></div></div>`;
   }
-  const res = (char, num) => {
-    const charName = reduceTextWidth(char.name, 'Arial 12px', 160);
-    const charTooltip = char.name !== charName ? char.name : '';
-    return `<div class="result"><div class="left">${num}</div><div class="right"><span title="${charTooltip}">${charName}</span></div></div>`;
+
+  const podiumRes = (item, num, points, position, isBottom = false) => {
+    const itemName = reduceTextWidth(item.name, 'Arial 12px', 160);
+    const itemTooltip = item.name !== itemName ? item.name : '';
+    const bottomClass = isBottom ? ' podium-bottom' : '';
+    return `<div class="podium-item podium-${position}${bottomClass}"><div class="podium-rank">#${num}</div><img src="${item.img}"><div class="podium-name" title="${itemTooltip}">${itemName}</div><div class="podium-points">${points} pts</div></div>`;
   }
+
+  /** Sort items by points (descending). */
+  const sortedItems = itemDataToSort.map((item, idx) => ({
+    item: item,
+    index: idx,
+    points: itemPoints[idx]
+  })).sort((a, b) => b.points - a.points);
 
   let rankNum       = 1;
   let tiedRankNum   = 1;
-  let imageDisplay  = imageNum;
 
-  const finalSortedIndexes = sortedIndexList[0].slice(0);
   const resultTable = document.querySelector('.results');
   const timeElem = document.querySelector('.time.taken');
 
-  resultTable.innerHTML = header;
+  resultTable.innerHTML = '';
   timeElem.innerHTML = timeStr;
+  finalItems = [];
 
-  characterDataToSort.forEach((val, idx) => {
-    const characterIndex = finalSortedIndexes[idx];
-    const character = characterDataToSort[characterIndex];
-    if (imageDisplay-- > 0) {
-      resultTable.insertAdjacentHTML('beforeend', imgRes(character, rankNum));
-    } else {
-      resultTable.insertAdjacentHTML('beforeend', res(character, rankNum));
+  // Create wrapper for both podiums
+  const podiumsWrapper = document.createElement('div');
+  podiumsWrapper.className = 'podiums-wrapper';
+
+  // Create podium section for top 3 (left side)
+  if (sortedItems.length >= 3) {
+    const topPodiumWrapper = document.createElement('div');
+    topPodiumWrapper.className = 'podium-wrapper';
+    
+    const topPodiumSection = document.createElement('div');
+    topPodiumSection.className = 'podium-container podium-top';
+    
+    // 2nd place (left)
+    const second = sortedItems[1];
+    topPodiumSection.insertAdjacentHTML('beforeend', podiumRes(second.item, 2, second.points, 'left', false));
+    finalItems.push({ rank: 2, name: second.item.name, points: second.points });
+    
+    // 1st place (middle)
+    const first = sortedItems[0];
+    topPodiumSection.insertAdjacentHTML('beforeend', podiumRes(first.item, 1, first.points, 'middle', false));
+    finalItems.push({ rank: 1, name: first.item.name, points: first.points });
+    
+    // 3rd place (right)
+    const third = sortedItems[2];
+    topPodiumSection.insertAdjacentHTML('beforeend', podiumRes(third.item, 3, third.points, 'right', false));
+    finalItems.push({ rank: 3, name: third.item.name, points: third.points });
+    
+    topPodiumWrapper.appendChild(topPodiumSection);
+    
+    // Add lorem ipsum below top podium (mode-dependent label)
+    const topLoremText = document.createElement('div');
+    topLoremText.className = 'podium-lorem';
+    topLoremText.innerHTML = `<strong>Pro-${selectedMode}</strong>`;
+    topPodiumWrapper.appendChild(topLoremText);
+    
+    podiumsWrapper.appendChild(topPodiumWrapper);
+    
+    // Handle ties for top 3
+    if (sortedItems[1].points === sortedItems[0].points) {
+      tiedRankNum = 2;
+    } else if (sortedItems[2].points === sortedItems[1].points) {
+      tiedRankNum = 2;
     }
-    finalCharacters.push({ rank: rankNum, name: character.name });
+    rankNum = 4;
+  } else if (sortedItems.length === 2) {
+    const topPodiumWrapper = document.createElement('div');
+    topPodiumWrapper.className = 'podium-wrapper';
+    
+    const topPodiumSection = document.createElement('div');
+    topPodiumSection.className = 'podium-container podium-top';
+    
+    const first = sortedItems[0];
+    topPodiumSection.insertAdjacentHTML('beforeend', podiumRes(first.item, 1, first.points, 'middle', false));
+    finalItems.push({ rank: 1, name: first.item.name, points: first.points });
+    
+    const second = sortedItems[1];
+    topPodiumSection.insertAdjacentHTML('beforeend', podiumRes(second.item, 2, second.points, 'left', false));
+    finalItems.push({ rank: 2, name: second.item.name, points: second.points });
+    
+    topPodiumWrapper.appendChild(topPodiumSection);
+    
+    // Add lorem ipsum below top podium (mode-dependent label)
+    const topLoremText = document.createElement('div');
+    topLoremText.className = 'podium-lorem';
+    topLoremText.innerHTML = `<strong>Pro-${selectedMode}</strong>`;
+    topPodiumWrapper.appendChild(topLoremText);
+    
+    podiumsWrapper.appendChild(topPodiumWrapper);
+    rankNum = 3;
+  } else if (sortedItems.length === 1) {
+    const topPodiumWrapper = document.createElement('div');
+    topPodiumWrapper.className = 'podium-wrapper';
+    
+    const topPodiumSection = document.createElement('div');
+    topPodiumSection.className = 'podium-container podium-top';
+    
+    const first = sortedItems[0];
+    topPodiumSection.insertAdjacentHTML('beforeend', podiumRes(first.item, 1, first.points, 'middle', false));
+    finalItems.push({ rank: 1, name: first.item.name, points: first.points });
+    
+    topPodiumWrapper.appendChild(topPodiumSection);
+    
+    // Add lorem ipsum below top podium (mode-dependent label)
+    const topLoremText = document.createElement('div');
+    topLoremText.className = 'podium-lorem';
+    topLoremText.innerHTML = `<strong>Pro-${selectedMode}</strong>`;
+    topPodiumWrapper.appendChild(topLoremText);
+    
+    podiumsWrapper.appendChild(topPodiumWrapper);
+    rankNum = 2;
+  }
 
-    if (idx < characterDataToSort.length - 1) {
-      if (tiedDataList[characterIndex] === finalSortedIndexes[idx + 1]) {
-        tiedRankNum++;            // Indicates how many people are tied at the same rank.
+  // Create podium section for bottom 3 (right side)
+  const totalItems = sortedItems.length;
+  if (totalItems >= 6) {
+    const bottomPodiumWrapper = document.createElement('div');
+    bottomPodiumWrapper.className = 'podium-wrapper';
+    
+    const bottomPodiumSection = document.createElement('div');
+    bottomPodiumSection.className = 'podium-container podium-bottom';
+    
+    // Bottom 3: last, second-to-last, third-to-last
+    const last = sortedItems[totalItems - 1];
+    const secondLast = sortedItems[totalItems - 2];
+    const thirdLast = sortedItems[totalItems - 3];
+    
+    // Calculate ranks - use array position + 1
+    const lastRank = totalItems;
+    const secondLastRank = totalItems - 1;
+    const thirdLastRank = totalItems - 2;
+    
+    bottomPodiumSection.insertAdjacentHTML('beforeend', podiumRes(secondLast.item, secondLastRank, secondLast.points, 'left', true));
+    bottomPodiumSection.insertAdjacentHTML('beforeend', podiumRes(last.item, lastRank, last.points, 'middle', true));
+    bottomPodiumSection.insertAdjacentHTML('beforeend', podiumRes(thirdLast.item, thirdLastRank, thirdLast.points, 'right', true));
+    
+    bottomPodiumWrapper.appendChild(bottomPodiumSection);
+    
+    // Add lorem ipsum below bottom podium (mode-dependent label)
+    const bottomLoremText = document.createElement('div');
+    bottomLoremText.className = 'podium-lorem';
+    bottomLoremText.innerHTML = `<strong>Anti-${selectedMode}</strong>`;
+    bottomPodiumWrapper.appendChild(bottomLoremText);
+    
+    podiumsWrapper.appendChild(bottomPodiumWrapper);
+  } else if (totalItems >= 3) {
+    // If less than 6 items, show bottom items in podium
+    const bottomPodiumWrapper = document.createElement('div');
+    bottomPodiumWrapper.className = 'podium-wrapper';
+    
+    const bottomPodiumSection = document.createElement('div');
+    bottomPodiumSection.className = 'podium-container podium-bottom';
+    
+    if (totalItems === 5) {
+      const last = sortedItems[4];
+      const secondLast = sortedItems[3];
+      bottomPodiumSection.insertAdjacentHTML('beforeend', podiumRes(secondLast.item, 4, secondLast.points, 'left', true));
+      bottomPodiumSection.insertAdjacentHTML('beforeend', podiumRes(last.item, 5, last.points, 'middle', true));
+      
+      bottomPodiumWrapper.appendChild(bottomPodiumSection);
+      
+      // Add lorem ipsum below bottom podium (mode-dependent label)
+      const bottomLoremText = document.createElement('div');
+      bottomLoremText.className = 'podium-lorem';
+      bottomLoremText.innerHTML = `<strong>Anti-${selectedMode}</strong>`;
+      bottomPodiumWrapper.appendChild(bottomLoremText);
+      
+      podiumsWrapper.appendChild(bottomPodiumWrapper);
+    } else if (totalItems === 4) {
+      const last = sortedItems[3];
+      bottomPodiumSection.insertAdjacentHTML('beforeend', podiumRes(last.item, 4, last.points, 'middle', true));
+      
+      bottomPodiumWrapper.appendChild(bottomPodiumSection);
+      
+      // Add lorem ipsum below bottom podium (mode-dependent label)
+      const bottomLoremText = document.createElement('div');
+      bottomLoremText.className = 'podium-lorem';
+      bottomLoremText.innerHTML = `<strong>Anti-${selectedMode}</strong>`;
+      bottomPodiumWrapper.appendChild(bottomLoremText);
+      
+      podiumsWrapper.appendChild(bottomPodiumWrapper);
+    }
+  }
+
+  resultTable.appendChild(podiumsWrapper);
+
+  // Add header for remaining items
+  if (sortedItems.length > 3) {
+    const restHeader = document.createElement('div');
+    restHeader.className = 'result head rest-header';
+    restHeader.innerHTML = '<div class="left">Rank</div><div class="right">Name (Points)</div>';
+    resultTable.appendChild(restHeader);
+  }
+
+  // Display remaining items normally (starting from 4th place)
+  for (let idx = 3; idx < sortedItems.length; idx++) {
+    const entry = sortedItems[idx];
+    const item = entry.item;
+    const points = entry.points;
+    
+    resultTable.insertAdjacentHTML('beforeend', imgRes(item, rankNum, points));
+    finalItems.push({ rank: rankNum, name: item.name, points: points });
+
+    /** Handle ties. */
+    if (idx < sortedItems.length - 1) {
+      if (sortedItems[idx + 1].points === points) {
+        tiedRankNum++;
       } else {
-        rankNum += tiedRankNum;   // Add it to the actual ranking, then reset it.
-        tiedRankNum = 1;          // The default value is 1, so it increments as normal if no ties.
+        rankNum += tiedRankNum;
+        tiedRankNum = 1;
       }
     }
-  });
+  }
 }
 
 /** Undo previous choice. */
 function undo() {
-  if (timeTaken) { return; }
+  if (timeTaken || comparisonNo === 0) { return; }
 
-  choices = battleNo === battleNoPrev ? choices : choices.slice(0, -1);
+  /** Restore previous state. */
+  itemPoints = itemPointsPrev.slice(0);
+  leftItemIndex = leftItemIndexPrev;
+  rightItemIndex = rightItemIndexPrev;
+  comparisonNo = comparisonNoPrev;
+  comparisonHistory = comparisonHistoryPrev.slice(0);
 
-  sortedIndexList = sortedIndexListPrev.slice(0);
-  recordDataList  = recordDataListPrev.slice(0);
-  parentIndexList = parentIndexListPrev.slice(0);
-  tiedDataList    = tiedDataListPrev.slice(0);
-
-  leftIndex       = leftIndexPrev;
-  leftInnerIndex  = leftInnerIndexPrev;
-  rightIndex      = rightIndexPrev;
-  rightInnerIndex = rightInnerIndexPrev;
-  battleNo        = battleNoPrev;
-  sortedNo        = sortedNoPrev;
-  pointer         = pointerPrev;
+  /** Remove last choice. */
+  if (choices.length > 0) {
+    choices = choices.slice(0, -1);
+  }
 
   display();
 }
@@ -587,33 +671,40 @@ function clearProgress() {
   document.querySelectorAll('.starting.load.button').forEach(el => el.style.display = 'none');
 }
 
-function generateImage() {
+function generateJSON() {
+  // Create JSON array from finalItems with name and points
+  const jsonData = finalItems.map(item => ({
+    name: item.name,
+    points: item.points
+  }));
+
+  const jsonString = JSON.stringify(jsonData, null, 2);
+  
+  // Create a blob and download it
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
   const timeFinished = timestamp + timeTaken;
   const tzoffset = (new Date()).getTimezoneOffset() * 60000;
-  const filename = 'sort-' + (new Date(timeFinished - tzoffset)).toISOString().slice(0, -5).replace('T', '(') + ').png';
-
-  html2canvas(document.querySelector('.results')).then(canvas => {
-    const dataURL = canvas.toDataURL();
-    const imgButton = document.querySelector('.finished.getimg.button');
-    const resetButton = document.createElement('a');
-
-    imgButton.removeEventListener('click', generateImage);
-    imgButton.innerHTML = '';
-    imgButton.insertAdjacentHTML('beforeend', `<a href="${dataURL}" download="${filename}">Download Image</a><br><br>`);
-
-    resetButton.insertAdjacentText('beforeend', 'Reset');
-    resetButton.addEventListener('click', (event) => {
-      imgButton.addEventListener('click', generateImage);
-      imgButton.innerHTML = 'Generate Image';
-      event.stopPropagation();
-    });
-    imgButton.insertAdjacentElement('beforeend', resetButton);
-  });
+  const finishDate = new Date(timeFinished - tzoffset);
+  
+  // Format: {MODE}-sort-{dd}-{mm}-{yyyy}-by-placeholder.json
+  const dd = String(finishDate.getUTCDate()).padStart(2, '0');
+  const mm = String(finishDate.getUTCMonth() + 1).padStart(2, '0');
+  const yyyy = finishDate.getUTCFullYear();
+  const filename = `${selectedMode}-sort-${dd}-${mm}-${yyyy}-by-placeholder.json`;
+  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function generateTextList() {
-  const data = finalCharacters.reduce((str, char) => {
-    str += `${char.rank}. ${char.name}<br>`;
+  const data = finalItems.reduce((str, item) => {
+    str += `${item.rank}. ${item.name} (${item.points} points)<br>`;
     return str;
   }, '');
   const oWindow = window.open("", "", "height=640,width=480");
@@ -625,7 +716,7 @@ function generateSavedata() {
   return LZString.compressToEncodedURIComponent(saveData);
 }
 
-/** Retrieve latest character data and options from dataset. */
+/** Retrieve latest item data and options from dataset. */
 function setLatestDataset() {
   /** Set some defaults. */
   timestamp = 0;
@@ -639,7 +730,7 @@ function setLatestDataset() {
     }, 0);
   currentVersion = Object.keys(dataSet)[latestDateIndex];
 
-  characterData = dataSet[currentVersion].characterData;
+  itemData = dataSet[currentVersion].characterData; // Keep same structure for now
   options = dataSet[currentVersion].options;
 
   populateOptions();
@@ -731,7 +822,7 @@ function decodeQuery(queryString = window.location.search.slice(1)) {
     }
 
     options = dataSet[currentVersion].options;
-    characterData = dataSet[currentVersion].characterData;
+    itemData = dataSet[currentVersion].characterData; // Keep same structure for now
 
     /** Populate option list and decode options selected. */
     populateOptions();
@@ -760,27 +851,61 @@ function decodeQuery(queryString = window.location.search.slice(1)) {
 }
 
 /** 
- * Preloads images in the filtered character data and converts to base64 representation.
+ * Preloads images in the filtered item data and converts to base64 representation.
 */
 function preloadImages() {
-  const totalLength = characterDataToSort.length;
+  const totalLength = itemDataToSort.length;
   let imagesLoaded = 0;
 
   const loadImage = async (src) => {
-    const blob = await fetch(src).then(res => res.blob());
-    return new Promise((res, rej) => {
-      const reader = new FileReader();
-      reader.onload = ev => {
-        progressBar(`Loading Image ${++imagesLoaded}`, Math.floor(imagesLoaded * 100 / totalLength));
-        res(ev.target.result);
-      };
-      reader.onerror = rej;
-      reader.readAsDataURL(blob);
-    });
+    // Try fetch first (works with http:// and https://)
+    try {
+      const blob = await fetch(src).then(res => {
+        if (!res.ok) throw new Error(`Failed to load ${src}`);
+        return res.blob();
+      });
+      return new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = ev => {
+          progressBar(`Loading Image ${++imagesLoaded}`, Math.floor(imagesLoaded * 100 / totalLength));
+          res(ev.target.result);
+        };
+        reader.onerror = rej;
+        reader.readAsDataURL(blob);
+      });
+    } catch (error) {
+      // Fallback: use Image object for file:// protocol
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const dataURL = canvas.toDataURL('image/png');
+            progressBar(`Loading Image ${++imagesLoaded}`, Math.floor(imagesLoaded * 100 / totalLength));
+            resolve(dataURL);
+          } catch (e) {
+            // If canvas fails, just use the image src directly
+            progressBar(`Loading Image ${++imagesLoaded}`, Math.floor(imagesLoaded * 100 / totalLength));
+            resolve(src);
+          }
+        };
+        img.onerror = () => {
+          console.error(`Failed to load image: ${src}`);
+          progressBar(`Loading Image ${++imagesLoaded}`, Math.floor(imagesLoaded * 100 / totalLength));
+          resolve(src); // Use original src as fallback
+        };
+        img.src = src;
+      });
+    }
   };
 
-  return Promise.all(characterDataToSort.map(async (char, idx) => {
-    characterDataToSort[idx].img = await loadImage(imageRoot + char.img);
+  return Promise.all(itemDataToSort.map(async (item, idx) => {
+    itemDataToSort[idx].img = await loadImage(imageRoot + item.img);
   }));
 }
 

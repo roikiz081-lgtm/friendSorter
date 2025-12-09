@@ -1,6 +1,6 @@
-# charasort
-A web based character sorter. Allows users to run through a manual merge sort of their favorite
-characters from a set.
+# PC Sort
+A web based PC (Personal Computer/Item) sorter. Allows users to sort items using a click-based point system.
+Items that get more clicks gain points, while items that lose clicks lose points. Final results are sorted by point totals.
 
 **Features**
  * Entirely client side, no backend server required.
@@ -8,8 +8,11 @@ characters from a set.
  * Shareable links of sorter results.
  * Versioning of sorter data - you may want to add characters and resources over time. Versioning keeps shareable links valid even if the base character data is changed.
  
-The version in this repo is built for characters from the [Touhou Project](https://en.wikipedia.org/wiki/Touhou_Project)
-game series, but the sorter can be easily edited to create any custom sorter desired.
+This version is a simplified PC sorting tool where you can add your own data and images. The sorting uses a point-based system:
+- Click on the item you prefer between two shown items
+- The clicked item gains +1 point
+- The other item loses -1 point
+- After comparisons, items are sorted by their total points
 
 ## Related Sorters
 Several others have created other sorters based on other concepts and series, see them [here](https://github.com/execfera/charasort/wiki)!
@@ -30,11 +33,11 @@ This is a list of things you need to change for your sorter, for each file.
 
  * `src/js/data/YYYY-MM-DD.js`
 
-    Creating your own set of data is relatively simple. First, change the `dataSetVersion` date to the date when you are creating the dataset. Example: `dataSetVersion = 2018-02-20`. The actual filename does not matter, it is just for your own easy reference.
+    Creating your own set of data is relatively simple. First, change the `dataSetVersion` date to the date when you are creating the dataset. Example: `dataSetVersion = "2025-01-01"`. The actual filename does not matter, it is just for your own easy reference.
     
-    Further down, each file comprises of two sets of data: `characterData` and `options`.
+    Further down, each file comprises of two sets of data: `characterData` (item data) and `options` (optional filters).
 
-    `characterData` is an array of objects filled with character data. Its layout is as follows.
+    `characterData` is an array of objects filled with item data. Its layout is as follows.
 
     ```
     {
@@ -50,20 +53,19 @@ This is a list of things you need to change for your sorter, for each file.
 
     Parameters:
 
-    * `name`: The name of the character to be displayed. **Required.**
-    * `img`: An image filename of the character, in 120px x 180px, to be added to `imageRoot` in `data.js`. **Required.**
-    * `opts`: An object of 'options' that will be used to filter out characters that will be used. Further explanation below. **Required.**
+    * `name`: The name of the item to be displayed. **Required.**
+    * `img`: An image filename of the item, in 120px x 180px, to be added to `imageRoot` in `data.js`. Put your images in `src/assets/char/` folder. **Required.**
+    * `opts`: An object of 'options' that will be used to filter out items. This is optional - you can use an empty object `{}` if you don't need filtering. **Required.**
 
     Example:
 
     ```
     {
-      name: "Flandre Scarlet",
-      img: "OhaDcnc.png",
+      name: "My Item 1",
+      img: "myitem1.png",
       opts: {
-        series: ["book", "EoSD", "StB"],
-        stage: ["ex"],
-        loli: true
+        // Optional: add filtering categories here
+        // category: ["cat1"],
       }
     }
     ```

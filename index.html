@@ -4,16 +4,15 @@
   <link rel="shortcut icon" href="src/assets/identity.ico" type="image/x-icon">
   <link rel="icon" href="src/assets/identity.ico" type="image/x-icon">
   <meta charset="utf-8">
-  <meta name="og:site_name" content="Limbus Company ID sorter">
-  <meta name="og:description" content="A simple website for sorting Limbus Company identities in a formatted list.">
+  <meta name="og:site_name" content="PC Sorting Tool">
   <meta name="og:image" content="https://imgur.com/gallery/1-F6edEWW">
-  <title>Limbus Identity Sorting</title>
+  <title>political compass sorting</title>
 
   <link rel="stylesheet" type="text/css" href="src/css/reset.css">
   <link rel="stylesheet" type="text/css" href="src/css/styles.css">
 
   <script src="src/js/data.js"></script>
-  <script src="src/js/data/2021-05-09.js"></script>
+  <script src="src/js/data/2025-01-01.js"></script>
 
   <script src="src/js/html2canvas.min.js"></script>
   <script src="src/js/lz-string.min.js"></script>
@@ -23,6 +22,7 @@
 
 <body>
 <div class="container">
+    <h1 class="site-title">Political Compass Sorter</h1>
 
     <div class="progress">
         <span class="progressbattle"></span>
@@ -34,7 +34,7 @@
     <div class="sorter">
         <img src="src/assets/defaultL.png" class="left sort image">
 
-        <div class="starting start button">Limbus Company ID Sorter<br><br>Click to Start!</div>
+        <div class="starting start button">PC sorting<br><br>Click to Start!</div>
         <div class="starting load button">Load <span></span></div>
 
         <div class="loading button"><div></div><span>Loading...</span></div>
@@ -44,13 +44,17 @@
         <div class="sorting save button">Save Progress</div>
 
         <div class="finished save button">Generate Result URL</div>
-        <div class="finished getimg button">Generate Image</div>
+        <div class="finished getimg button">Generate JSON</div>
         <div class="finished list button">Generate Text List</div>
 
         <img src="src/assets/defaultR.png" class="right sort image">
 
         <div class="left sort text"><p></p></div>
         <div class="right sort text"><p></p></div>
+        <div class="center-actions">
+            <div class="half button selected" data-mode="ERP">ERP</div>
+            <div class="half button" data-mode="SPAM">SPAM</div>
+        </div>
     </div>
 
     <div class="options"></div>
@@ -59,20 +63,19 @@
     <div class="results"></div>
 
     <div class="info">
-        <a href="mattim0flag@gmail.com">Contact</a> | <a href="https://github.com/PowerUpHero3/limbussort">Source Code</a> | <a class="clearsave">Clear Save Data</a>
+        <a href="mattim0flag@gmail.com">Contact</a> | <a href="https://github.com/PowerUpHero3/PCPSort">Source Code</a> | <a class="clearsave">Clear Save Data</a>
         
         <br><br>
 
-        <p>Sorter for Limbus Company Identities. Pick your sources, and hit the Start button.</p>
-        <p><strong>Certain options have details that you can hover to read.</strong></p>
-        <p>Click on the identity you like better from the two, or tie them if you like them equally or don't know them.</p>
-        <p>This could take a while to sort through, so please be patient, Managers.</p>
+        <p>PC Sorting Tool. Add your own data and images, then start sorting!</p>
+        <p><strong>Click on the item you prefer from the two shown.</strong></p>
+        <p>The item you click gains points, while the other loses points. Items are sorted by their final point totals.</p>
+        <p>You can add your own data by editing the data file.</p>
 
         <br><br>
 
-        <p>Keyboard controls during sorting: H/LeftArrow (pick left) J/DownArrow (undo) K/UpArrow (tie) L/RightArrow (pick right) S (save progress).</p>
-        <p>Before sorting: S/Enter (start sorting) L (load progress).
-        <p>1/2/3 always correspond to the first/second/third buttons.</p>
+        <p>Keyboard controls during sorting: H/LeftArrow (pick left) L/RightArrow (pick right) K/UpArrow (tie) J/DownArrow (undo) S (save progress).</p>
+        <p>Before sorting: S/Enter (start sorting) L (load progress).</p>
         
         <br><br>
 
